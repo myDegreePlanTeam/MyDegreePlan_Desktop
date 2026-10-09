@@ -3,7 +3,33 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
-const { APP_ORIGIN, CSP, isAllowedRequestUrl, isUpdateUrl, isRequestAllowed, isAppUrl, resolveAppPath } = require('../src/security')
+const { APP_ORIGIN, CSP, isAllowedRequestUrl, isUpdateUrl, isRequestAllowed, isAppUrl, resolveAppPath, isPdfViewerSupportUrl } = require('../src/security')
+
+test('the built-in PDF viewer may load (the plan preview needs it), and nothing else under chrome-extension://', () => {
+  const id = 'mhjfbmdgcfjbbpaeojofohoefgiehjai'
+  for (const ok of [`chrome-extension://${id}/index.html`, `chrome-extension://${id}/pdf_embedder.css`, `chrome-extension://${id}/`]) {
+    assert.equal(isAllowedRequestUrl(ok), true, ok)
+    assert.equal(isRequestAllowed({ url: ok, webContentsId: 3 }), true, `${ok} from a page`)
+  }
+  for (const bad of [
+    'chrome-extension://abcdefghijklmnopabcdefghijklmnop/index.html',     // any other extension
+    `chrome-extension://${id}.evil.example/index.html`,                    // a look-alike host
+    `chrome-extension://x${id}/index.html`,
+    'chrome://settings/', 'chrome://history/', 'chrome://flags/', 'chrome-untrusted://pdf/index.html', 'chrome-search://local-ntp/',
+    'chrome://resources.evil.example/x.js',
+  ]) {
+    assert.equal(isAllowedRequestUrl(bad), false, bad)
+  }
+})
+
+test('the viewer\'s own support files (chrome://resources/) may load, and only that chrome:// host', () => {
+  for (const ok of ['chrome://resources/css/text_defaults_md.css', 'chrome://resources/lit/v3_0/lit.rollup.js', 'chrome://resources/js/load_time_data.js']) {
+    assert.equal(isAllowedRequestUrl(ok), true, ok)
+  }
+  assert.equal(isPdfViewerSupportUrl('chrome://resources/x.js'), true)
+  assert.equal(isPdfViewerSupportUrl('chrome://settings/x.js'), false)
+  assert.equal(isPdfViewerSupportUrl('https://resources/x.js'), false)
+})
 
 test('the update hosts are GitHub over https only', () => {
   for (const ok of ['https://github.com/o/r/releases.atom', 'https://api.github.com/repos/o/r', 'https://release-assets.githubusercontent.com/x', 'https://objects.githubusercontent.com/x']) {

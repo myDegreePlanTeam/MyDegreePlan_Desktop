@@ -29,8 +29,23 @@ const CSP = [
 // Protocols a renderer request may use. Anything else (http, https, ws, ftp ...) is cancelled in the session.
 const ALLOWED_PROTOCOLS = new Set([`${APP_SCHEME}:`, 'data:', 'blob:', 'devtools:'])
 
+// Chromium's built-in PDF viewer, which the plan preview needs (the Frontend embeds its PDF as <iframe src="blob:...">).
+// It is a local resource bundled in Electron, not a network host, so allowing it lets the page reach nothing new. Only
+// this one extension: any other chrome-extension:// or chrome:// URL stays blocked. (smoke checks it really loads.)
+const PDF_VIEWER_EXTENSION_ID = 'mhjfbmdgcfjbbpaeojofohoefgiehjai'
+
+function isPdfViewerUrl(url) {
+  try { const u = new URL(url); return u.protocol === 'chrome-extension:' && u.hostname === PDF_VIEWER_EXTENSION_ID } catch { return false }
+}
+
+// The viewer's own scripts and styles (lit, load_time_data, mojo bindings ...) are served from chrome://resources/, Chromium's
+// bundled UI files. Without them the viewer's page loads but never starts, leaving a blank pane. Only that one host.
+function isPdfViewerSupportUrl(url) {
+  try { const u = new URL(url); return u.protocol === 'chrome:' && u.hostname === 'resources' } catch { return false }
+}
+
 function isAllowedRequestUrl(url) {
-  try { return ALLOWED_PROTOCOLS.has(new URL(url).protocol) } catch { return false }
+  try { return ALLOWED_PROTOCOLS.has(new URL(url).protocol) || isPdfViewerUrl(url) || isPdfViewerSupportUrl(url) } catch { return false }
 }
 
 // The one outbound exception, and only for the main process (never the page): the update check and download on
@@ -69,4 +84,4 @@ function resolveAppPath(root, pathname) {
   return { file, spa: false }
 }
 
-module.exports = { APP_SCHEME, APP_HOST, APP_ORIGIN, CSP, isAllowedRequestUrl, isUpdateUrl, isRequestAllowed, isAppUrl, resolveAppPath }
+module.exports = { APP_SCHEME, APP_HOST, APP_ORIGIN, CSP, PDF_VIEWER_EXTENSION_ID, isPdfViewerUrl, isPdfViewerSupportUrl, isAllowedRequestUrl, isUpdateUrl, isRequestAllowed, isAppUrl, resolveAppPath }

@@ -24,7 +24,7 @@ cd ../MyDegreePlan_Desktop && npm install && npm start
 |---|---|
 | `npm start` | Run the app from source against `../MyDegreePlan_Frontend/dist` (`MDP_WEB_ROOT=<folder>` overrides) |
 | `npm test` | Unit tests (security rules, updater) |
-| `npm run smoke` | Launch, check the page renders from `app://mdp`, IndexedDB opens, an outside request is blocked and Node is not exposed; exit 0 / 1 |
+| `npm run smoke` | Launch, check the page renders from `app://mdp`, IndexedDB opens, an outside request is blocked, Node is not exposed, and **the PDF preview works** (a PDF in `<iframe src="blob:...">`, as the plan preview does it: the built-in viewer must start, with its toolbar and PDF plugin, and nothing it needs may be blocked); exit 0 / 1 |
 | `npm run pack` | Build the unpacked app into `release/win-unpacked` (fast) |
 | `npm run dist` | Build the installer `release/MyDegreePlan-Setup-<version>.exe`, its blockmap and `latest.yml` |
 | `npm run icons` | Render `build-resources/icon.svg` (the source) to `build-resources/icon.png`; add `-- --preview DIR` for 16 to 256 px copies to check by eye |
@@ -68,8 +68,13 @@ Integrity today rests on the SHA-512 in `latest.yml` served over HTTPS from this
 - **The origin is `app://mdp` forever.** IndexedDB is keyed by origin; changing the scheme or host orphans every saved plan (`src/security.js`, with a test).
 - **The install folder and app name are permanent too:** `package.json` `name` (`mydegreeplan`) sets `%LOCALAPPDATA%\Programs\mydegreeplan` and
   `appId` is the Windows identity; changing either makes an update install beside the old copy instead of over it. `productName` sets the data folder.
-- **The page never reaches the network.** The session cancels every request that is not `app:`, `data:`, `blob:` or `devtools:`. The one exception
-  is the update check to GitHub, and only for requests made by the main process (they carry no page); a page can never reach those hosts.
+- **The page never reaches the network.** The session cancels every request that is not `app:`, `data:`, `blob:` or `devtools:`. The exceptions:
+  the update check to GitHub, only for requests made by the main process (they carry no page; a page can never reach those hosts); and Chromium's
+  **built-in PDF viewer**, which the plan preview needs: `chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/` (that one extension) and `chrome://resources/`
+  (its bundled scripts and styles). These are local files inside Electron, not network hosts. Any other `chrome-extension://`, `chrome://` or
+  `chrome-untrusted://` URL stays blocked. The lockdown once blocked the viewer and left the preview blank; `npm run smoke` now fails if the viewer cannot start
+  (`src/pdfCheck.js`, with tests built from the states seen while fixing it). If a Chromium upgrade makes the viewer need another file, the smoke report lists
+  the blocked request under `pdf.blockedDuringPdf`.
 - **Renderer hardening:** `contextIsolation`, `sandbox`, no `nodeIntegration`, no navigation away from the app origin, no `window.open`
   (an `https:` link opens in the system browser), all permission requests denied, one instance at a time.
 - **Binary hardening (fuses):** `RunAsNode`, `NODE_OPTIONS` and `--inspect` are off; the app loads only from the asar, with integrity validation on.

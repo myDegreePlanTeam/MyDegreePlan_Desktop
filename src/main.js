@@ -6,8 +6,10 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { app, BrowserWindow, ipcMain, protocol, session, shell } = require('electron')
-const { APP_SCHEME, APP_HOST, APP_ORIGIN, CSP, isRequestAllowed, isAppUrl, resolveAppPath } = require('./security')
+const { APP_SCHEME, APP_HOST, APP_ORIGIN, CSP, isRequestAllowed, isAppUrl, isPdfViewerUrl, resolveAppPath } = require('./security')
 const { createUpdater } = require('./updater')
+const { buildTestPdf } = require('./testPdf')
+const { pdfPreviewVerdict } = require('./pdfCheck')
 
 const SMOKE = process.argv.includes('--mdp-smoke')
 
@@ -61,12 +63,19 @@ function serveApp(root) {
   return misses
 }
 
+// Returns the list of requests it cancelled, so the smoke check can see what the lockdown blocked.
 function lockDownSession(ses) {
+  const blocked = []
   // The enforcement half of the privacy promise: nothing but the app itself, data: and blob: is reachable.
   // The updater's requests (main process, no page behind them) may also reach GitHub Releases; a page never can.
-  ses.webRequest.onBeforeRequest((details, callback) => callback({ cancel: !isRequestAllowed(details) }))
+  ses.webRequest.onBeforeRequest((details, callback) => {
+    const allowed = isRequestAllowed(details)
+    if (!allowed) blocked.push(`${details.resourceType} ${details.url.slice(0, 120)}`)
+    callback({ cancel: !allowed })
+  })
   ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
   ses.setPermissionCheckHandler(() => false)
+  return blocked
 }
 
 function createWindow() {
@@ -104,8 +113,53 @@ function createWindow() {
   return win
 }
 
+// The Frontend's plan preview shows its PDF as <iframe src="blob:...#view=FitH&navpanes=0">, which needs Chromium's built-in
+// PDF viewer. This does the same with a small valid PDF and reports whether the viewer actually started and what, if anything,
+// the lockdown blocked while it did. (Diagnostic: the frames and blocked requests are in the report.)
+async function pdfPreviewCheck(wc, blocked) {
+  const from = blocked.length
+  const base64 = buildTestPdf().toString('base64')
+  await wc.executeJavaScript(`(() => {
+    const bytes = Uint8Array.from(atob(${JSON.stringify(base64)}), c => c.charCodeAt(0))
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }))
+    const frame = document.createElement('iframe')
+    frame.id = 'mdp-pdf-smoke'
+    frame.title = 'Degree plan PDF preview'
+    frame.style.cssText = 'position:fixed;left:0;top:0;width:800px;height:600px;border:0;z-index:99999;background:#fff'
+    frame.src = url + '#view=FitH&navpanes=0'
+    document.body.appendChild(frame)
+  })()`)
+  let frames = []
+  for (let i = 0; i < 60; i++) {
+    await new Promise(resolve => setTimeout(resolve, 250))
+    frames = wc.mainFrame.framesInSubtree.map(frame => frame.url)
+    if (frames.some(isPdfViewerUrl)) break
+  }
+  // The viewer's frame exists even when its page load was cancelled, so ask the frame itself what it holds.
+  let viewer = null
+  const viewerFrame = wc.mainFrame.framesInSubtree.find(frame => isPdfViewerUrl(frame.url))
+  if (viewerFrame) {
+    for (let i = 0; i < 40 && !(viewer?.hasViewer); i++) {
+      await new Promise(resolve => setTimeout(resolve, 250))
+      try {
+        viewer = await viewerFrame.executeJavaScript(`({
+          title: document.title,
+          children: document.body ? document.body.children.length : 0,
+          tags: document.body ? [...document.body.children].map(e => e.tagName.toLowerCase()).slice(0, 8) : [],
+          hasViewer: !!document.querySelector('pdf-viewer, viewer-app, #viewer, embed'),
+          defined: !!customElements.get('pdf-viewer'),
+          shadowChildren: document.querySelector('pdf-viewer')?.shadowRoot?.childElementCount ?? 0,
+          shadowIds: [...(document.querySelector('pdf-viewer')?.shadowRoot?.querySelectorAll('[id]') ?? [])].map(e => e.tagName.toLowerCase() + '#' + e.id).slice(0, 14),
+          plugin: (() => { const e = document.querySelector('pdf-viewer')?.shadowRoot?.querySelector('embed'); return e ? e.type : null })(),
+        })`)
+      } catch (err) { viewer = { error: String(err.message ?? err) } }
+    }
+  }
+  return { frames, viewer, blockedDuringPdf: blocked.slice(from) }
+}
+
 // A one-shot check used by `npm run smoke` and CI: loads the app, reports what the page sees, exits non-zero on failure.
-async function smoke(win, { root, misses }) {
+async function smoke(win, { root, misses, blocked }) {
   const wc = win.webContents
   await new Promise(resolve => wc.once('did-finish-load', resolve))
   // Every file of the web build must be served (a 404 here would be a 404 for a student, so it fails the release).
@@ -133,9 +187,11 @@ async function smoke(win, { root, misses }) {
       title: document.title,
     }
   })()`)
+  const pdf = await pdfPreviewCheck(wc, blocked)
+  const pdfVerdict = pdfPreviewVerdict(pdf)
   const ok = report.origin === APP_ORIGIN && report.rendered && report.externalBlocked && report.idbOpens && report.desktopBridge && !report.nodeLeaked
-    && report.filesChecked > 0 && report.notServed.length === 0 && misses.length === 0
-  const line = JSON.stringify({ smoke: ok ? 'pass' : 'FAIL', packaged: app.isPackaged, ...report, misses })
+    && report.filesChecked > 0 && report.notServed.length === 0 && misses.length === 0 && pdfVerdict.ok
+  const line = JSON.stringify({ smoke: ok ? 'pass' : 'FAIL', packaged: app.isPackaged, ...report, misses, pdfWorks: pdfVerdict.ok, pdfProblems: pdfVerdict.problems, pdf })
   console.log(line)
   // A packaged GUI exe does not print to a pipe, so the report can also go to a file.
   if (process.env.MDP_SMOKE_OUT) fs.writeFileSync(process.env.MDP_SMOKE_OUT, line + '\n')
@@ -155,7 +211,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('mdp:version', () => app.getVersion())
     const root = webRoot()
     const misses = serveApp(root)
-    lockDownSession(session.defaultSession)
+    const blocked = lockDownSession(session.defaultSession)
     const win = createWindow()
     // Checks only in a packaged app (a development run and a smoke run report "disabled").
     createUpdater({
@@ -164,7 +220,7 @@ if (!app.requestSingleInstanceLock()) {
       autoUpdater: require('electron-updater').autoUpdater,
       env: SMOKE ? { ...process.env, MDP_UPDATES: 'off' } : process.env,
     })
-    if (SMOKE) smoke(win, { root, misses }).catch(err => { console.error(err); app.exit(1) })
+    if (SMOKE) smoke(win, { root, misses, blocked }).catch(err => { console.error(err); app.exit(1) })
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
   })
 
