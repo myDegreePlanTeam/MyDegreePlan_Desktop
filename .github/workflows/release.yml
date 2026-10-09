@@ -46,7 +46,9 @@ jobs:
       - name: Check the version
         run: |
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version must look like 1.2.3"; exit 1; }
-          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          # The releases API lists drafts too (a draft has no tag yet, so a lookup by tag would miss it).
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].tag_name' > tags.txt
+          if grep -qxF "v$VERSION" tags.txt; then
             echo "::error::v$VERSION already exists (published or draft). Versions are immutable; pick a new one."; exit 1
           fi
 
@@ -86,6 +88,7 @@ jobs:
     needs: test
     runs-on: windows-latest
     environment: release
+    timeout-minutes: 30
     permissions:
       contents: write        # create the release
       id-token: write        # build provenance attestation
@@ -107,10 +110,12 @@ jobs:
         shell: bash
         run: |
           npm ci
-          npm version "$VERSION" --no-git-tag-version
+          # The committed version may already equal the release version, which plain `npm version` refuses.
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
           npm run dist
 
       - name: Smoke the built app (renders, every file served, nothing blocked that should not be)
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'smoke.json'
@@ -147,13 +152,18 @@ jobs:
           gh release create "v$VERSION" \
             "MyDegreePlan-Setup-$VERSION.exe" "MyDegreePlan-Setup-$VERSION.exe.blockmap" MyDegreePlan-Setup.exe latest.yml \
             --repo "$GITHUB_REPOSITORY" --draft --title "MyDegreePlan $VERSION" --notes-file notes.txt --target "$GITHUB_SHA"
+          # A draft has no tag, so later steps address it by its id (found through the API, which lists drafts).
+          ID=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"v$VERSION\" and .draft == true) | .id" | head -n1 | tr -d '\r')
+          [ -n "$ID" ] || { echo "::error::could not find the draft release just created"; exit 1; }
+          echo "RELEASE_ID=$ID" >> "$GITHUB_ENV"
+          echo "draft release id: $ID"
 
       - name: Check the draft holds every file, at the right size
         working-directory: release
         shell: bash
         run: |
           set -e
-          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[] | "\(.name) \(.size)"' | tr -d '\r' | sort > remote.txt
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.assets[] | "\(.name) \(.size)"' | tr -d '\r' | sort > remote.txt
           cat remote.txt
           for f in "MyDegreePlan-Setup-$VERSION.exe" "MyDegreePlan-Setup-$VERSION.exe.blockmap" MyDegreePlan-Setup.exe latest.yml; do
             want="$f $(stat -c %s "$f")"
@@ -163,7 +173,8 @@ jobs:
       - name: Publish
         id: publish
         shell: bash
-        run: gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        run: |
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=false -f make_latest=true --jq '"published: \(.html_url) draft=\(.draft)"'
 
       - name: Check every public URL an installed app or the website will request
         shell: bash
@@ -174,7 +185,9 @@ jobs:
           get() { curl -fsSL --retry 8 --retry-delay 10 --retry-all-errors "$@"; }
 
           echo "== what electron-updater reads: the releases feed, then latest.yml"
-          get "$BASE/releases.atom" | grep -q "releases/tag/v$VERSION"
+          # To a file first: `curl | grep -q` can fail with a broken pipe under pipefail even when the URL is fine.
+          get "$BASE/releases.atom" -o releases.atom
+          grep -q "releases/tag/v$VERSION" releases.atom
           get "$BASE/releases/latest/download/latest.yml" -o latest.public.yml
           cat latest.public.yml
           grep -q "^version: $VERSION$" latest.public.yml
@@ -199,4 +212,5 @@ jobs:
       - name: Pull the release back to a draft if a public check failed
         if: failure() && steps.publish.outcome == 'success'
         shell: bash
-        run: gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=true
+        run: |
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" -F draft=true --jq '"back to draft: \(.draft)"'
