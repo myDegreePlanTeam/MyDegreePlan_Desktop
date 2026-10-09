@@ -56,6 +56,10 @@ only `main` may deploy to it). Versions cannot be reused. Add `SOURCES_TOKEN` if
 Each release carries the installer under two names: `MyDegreePlan-Setup-<version>.exe` (what `latest.yml` names, for the updater) and `MyDegreePlan-Setup.exe`
 (fixed, for the website). The Site picks a release up on its next build (its daily cron, or run its workflow by hand).
 
+`build.json` (`{ version, frontend, desktop }`) records the Frontend and Desktop commits a release was built from. The Frontend repo's drift watchdog
+(`parity/watch.mjs`) reads it to see whether this app is running the Frontend's latest user-facing changes; a release whose web build has no commit
+in its `version.json` is refused. Older releases (0.1.0 to 0.1.2) have no `build.json`, so the watchdog infers their commit from the release time.
+
 ## Updates
 
 `electron-updater` checks GitHub Releases 15 seconds after start and every 6 hours, only in an installed app (`MDP_UPDATES=off` in the environment turns it off).

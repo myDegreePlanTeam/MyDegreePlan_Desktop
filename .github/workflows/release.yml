@@ -136,6 +136,20 @@ jobs:
           grep -q "^path: MyDegreePlan-Setup-$VERSION.exe$" latest.yml
           grep -q "url: MyDegreePlan-Setup-$VERSION.exe$" latest.yml
 
+      # Which commits this release was built from. The drift watchdog in the Frontend repo (parity/watch.mjs) reads it to tell whether
+      # this platform is running the Frontend's latest user-facing changes. It fails closed: a web build with no commit is not shipped.
+      - name: Record which commits this release was built from
+        working-directory: release
+        shell: bash
+        run: |
+          set -e
+          FRONTEND_COMMIT=$(node -p "require(process.env.MDP_WEB_ROOT + '/version.json').commit")
+          if [ -z "$FRONTEND_COMMIT" ] || [ "$FRONTEND_COMMIT" = "null" ]; then
+            echo "::error::the web build has no commit in version.json (the Frontend build must include the build-identity plugin)"; exit 1
+          fi
+          printf '{"version":"%s","frontend":"%s","desktop":"%s"}\n' "$VERSION" "$FRONTEND_COMMIT" "$GITHUB_SHA" > build.json
+          cat build.json
+
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: release/MyDegreePlan-Setup-${{ inputs.version }}.exe
@@ -150,7 +164,7 @@ jobs:
           # which only works if every release carries a copy under that fixed name.
           cp "MyDegreePlan-Setup-$VERSION.exe" MyDegreePlan-Setup.exe
           gh release create "v$VERSION" \
-            "MyDegreePlan-Setup-$VERSION.exe" "MyDegreePlan-Setup-$VERSION.exe.blockmap" MyDegreePlan-Setup.exe latest.yml \
+            "MyDegreePlan-Setup-$VERSION.exe" "MyDegreePlan-Setup-$VERSION.exe.blockmap" MyDegreePlan-Setup.exe latest.yml build.json \
             --repo "$GITHUB_REPOSITORY" --draft --title "MyDegreePlan $VERSION" --notes-file notes.txt --target "$GITHUB_SHA"
           # A draft has no tag, so later steps address it by its id (found through the API, which lists drafts).
           ID=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"v$VERSION\" and .draft == true) | .id" | head -n1 | tr -d '\r')
@@ -165,7 +179,7 @@ jobs:
           set -e
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" --jq '.assets[] | "\(.name) \(.size)"' | tr -d '\r' | sort > remote.txt
           cat remote.txt
-          for f in "MyDegreePlan-Setup-$VERSION.exe" "MyDegreePlan-Setup-$VERSION.exe.blockmap" MyDegreePlan-Setup.exe latest.yml; do
+          for f in "MyDegreePlan-Setup-$VERSION.exe" "MyDegreePlan-Setup-$VERSION.exe.blockmap" MyDegreePlan-Setup.exe latest.yml build.json; do
             want="$f $(stat -c %s "$f")"
             grep -qxF "$want" remote.txt || { echo "::error::draft is missing or has the wrong size for: $f"; exit 1; }
           done
@@ -206,6 +220,11 @@ jobs:
           echo "== the fixed-name link on the website, and that it is the same file"
           get "$BASE/releases/latest/download/MyDegreePlan-Setup.exe" -o fixed.public.exe
           cmp installer.public.exe fixed.public.exe
+
+          echo "== build.json, which the drift watchdog reads"
+          get "$BASE/releases/latest/download/build.json" -o build.public.json
+          cat build.public.json
+          grep -q "\"version\":\"$VERSION\"" build.public.json
 
           echo "all public URLs answer"
 
