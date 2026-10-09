@@ -12,7 +12,8 @@
     "test": "node --test test/*.test.js",
     "prepare:web": "node scripts/prepare-web.js",
     "pack": "npm run prepare:web && electron-builder --win --dir --publish never",
-    "dist": "npm run prepare:web && electron-builder --win --publish never"
+    "dist": "npm run prepare:web && electron-builder --win --publish never",
+    "icons": "electron scripts/make-icons.js"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"
