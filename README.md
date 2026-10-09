@@ -33,10 +33,19 @@ The built app can be smoke-tested too: `MDP_SMOKE_OUT=report.json release\win-un
 
 ## Releasing
 
-Actions -> **Release** -> Run workflow (`version`, `notes`, optional `frontend_ref`). It tests the Frontend and this repo, builds the installer,
-smoke-tests the built app, attests provenance, and creates a GitHub Release with the installer, blockmap and `latest.yml`; installed apps find
-it through `releases/latest`. Versions cannot be reused. Give the `release` environment a required reviewer. Add `SOURCES_TOKEN` if the Frontend repo is private.
-The workflow has not been run on GitHub yet; expect to fix a small thing the first time.
+Actions -> **Release** -> Run workflow (`version`, `notes`, optional `frontend_ref`), then approve the `release` environment (required reviewer: bradyg7;
+only `main` may deploy to it). Versions cannot be reused. Add `SOURCES_TOKEN` if the Frontend repo is private.
+
+1. **test job** (needs no approval, so a failure shows before anyone is asked): version is free, Frontend tests and build, this repo's tests, which include
+   "every file the web build refers to exists" (`test/web-assets.test.js`).
+2. **release job** (after approval, Windows runner): builds the installer; smoke-tests the built app, which fetches every file of the web build through
+   `app://mdp` and fails on any 404 / 403; attests provenance; creates the release as a **draft** and checks that every file is there at the right size;
+   publishes; then checks every public URL an installed app or the website will request (the releases feed, `latest.yml`, the versioned installer and its
+   blockmap, the fixed-name `MyDegreePlan-Setup.exe`), and that the installer's SHA-512 equals the one in `latest.yml`. If a public check fails the release
+   is pulled back to a draft (delete it, and its tag, before reusing the version).
+
+Each release carries the installer under two names: `MyDegreePlan-Setup-<version>.exe` (what `latest.yml` names, for the updater) and `MyDegreePlan-Setup.exe`
+(fixed, for the website). The Site picks a release up on its next build (its daily cron, or run its workflow by hand).
 
 ## Updates
 

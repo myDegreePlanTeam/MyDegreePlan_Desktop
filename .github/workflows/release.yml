@@ -1,13 +1,17 @@
 # Publishes a Windows release that installed apps pick up through their update check.
-# Run it by hand: Actions -> Release -> Run workflow.
+# Run it by hand: Actions -> Release -> Run workflow, then approve the "release" environment.
 #
 # What a release is: MyDegreePlan-Setup-<version>.exe (+ blockmap for differential downloads), the same installer as
 # MyDegreePlan-Setup.exe (a fixed name for the website's download link) and latest.yml, attached to a
 # GitHub Release whose body is the notes students read in the update card. The installer is NOT code signed yet.
 #
-# Nothing is published until the Frontend tests, the Desktop tests and a smoke run of the built app have all passed.
-# Configure the "release" environment with a required reviewer so each release needs a second click.
-# If the Frontend repo is private, add SOURCES_TOKEN (a read-only token for it).
+# Order, so a problem is found before anyone is asked to approve and before anyone can download it:
+#   test job (no approval)   version check, Frontend + Desktop tests, Frontend build
+#   release job (approval)   build installer -> smoke the built app (every file served, no 404) -> DRAFT release ->
+#                            check the draft's files -> publish -> check every public URL an installed app or the site
+#                            will request, including the installer's SHA-512 against latest.yml.
+#                            If a public check fails the release is pulled back to a draft.
+# Add SOURCES_TOKEN if the Frontend repo is private.
 name: Release
 
 on:
@@ -30,28 +34,23 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  VERSION: ${{ inputs.version }}
+
 jobs:
-  release:
-    runs-on: windows-latest
-    environment: release
-    permissions:
-      contents: write        # create the release
-      id-token: write        # build provenance attestation
-      attestations: write
+  test:
+    runs-on: ubuntu-latest
     env:
-      VERSION: ${{ inputs.version }}
-      NOTES: ${{ inputs.notes }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check the version
-        shell: bash
         run: |
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version must look like 1.2.3"; exit 1; }
           if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "::error::v$VERSION already exists. Versions are immutable; pick a new one."; exit 1
+            echo "::error::v$VERSION already exists (published or draft). Versions are immutable; pick a new one."; exit 1
           fi
 
-      # Side by side, as on a developer machine: scripts/prepare-web.js reads ../MyDegreePlan_Frontend/dist.
+      # Side by side, as on a developer machine: the tests read ../MyDegreePlan_Frontend/dist.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with: { path: mdp/MyDegreePlan_Desktop }
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -70,21 +69,48 @@ jobs:
           npm test
           npm run build
 
-      - name: Desktop tests
+      - name: Desktop tests (including the check that every file the web build refers to exists)
         working-directory: mdp/MyDegreePlan_Desktop
         run: |
           npm ci
           npm test
 
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web
+          path: mdp/MyDegreePlan_Frontend/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: test
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: write        # create the release
+      id-token: write        # build provenance attestation
+      attestations: write
+    env:
+      NOTES: ${{ inputs.notes }}
+      GH_TOKEN: ${{ github.token }}
+      MDP_WEB_ROOT: ${{ github.workspace }}/web
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 22 }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: web
+          path: web
+
       - name: Build the installer
-        working-directory: mdp/MyDegreePlan_Desktop
         shell: bash
         run: |
+          npm ci
           npm version "$VERSION" --no-git-tag-version
           npm run dist
 
-      - name: Smoke the built app
-        working-directory: mdp/MyDegreePlan_Desktop
+      - name: Smoke the built app (renders, every file served, nothing blocked that should not be)
         shell: pwsh
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'smoke.json'
@@ -94,7 +120,7 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "smoke check failed (exit $($p.ExitCode))" }
 
       - name: Check the files match what the updater will look for
-        working-directory: mdp/MyDegreePlan_Desktop/release
+        working-directory: release
         shell: bash
         run: |
           set -e
@@ -102,28 +128,75 @@ jobs:
           test -f "MyDegreePlan-Setup-$VERSION.exe"
           test -f "MyDegreePlan-Setup-$VERSION.exe.blockmap"
           grep -q "^version: $VERSION$" latest.yml
+          grep -q "^path: MyDegreePlan-Setup-$VERSION.exe$" latest.yml
           grep -q "url: MyDegreePlan-Setup-$VERSION.exe$" latest.yml
 
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
-          subject-path: mdp/MyDegreePlan_Desktop/release/MyDegreePlan-Setup-${{ inputs.version }}.exe
+          subject-path: release/MyDegreePlan-Setup-${{ inputs.version }}.exe
 
-      - name: Publish the release
-        working-directory: mdp/MyDegreePlan_Desktop/release
+      - name: Create the release as a draft (nobody can download it yet)
+        working-directory: release
         shell: bash
         run: |
+          set -e
           printf '%s\n' "$NOTES" > notes.txt
           # The updater needs the versioned name. The site links to releases/latest/download/MyDegreePlan-Setup.exe,
           # which only works if every release carries a copy under that fixed name.
           cp "MyDegreePlan-Setup-$VERSION.exe" MyDegreePlan-Setup.exe
           gh release create "v$VERSION" \
             "MyDegreePlan-Setup-$VERSION.exe" "MyDegreePlan-Setup-$VERSION.exe.blockmap" MyDegreePlan-Setup.exe latest.yml \
-            --repo "$GITHUB_REPOSITORY" --title "MyDegreePlan $VERSION" --notes-file notes.txt --target "$GITHUB_SHA"
+            --repo "$GITHUB_REPOSITORY" --draft --title "MyDegreePlan $VERSION" --notes-file notes.txt --target "$GITHUB_SHA"
 
-      - name: Check the published release is what the updater will fetch
+      - name: Check the draft holds every file, at the right size
+        working-directory: release
         shell: bash
         run: |
-          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.yml" | tee latest.published.yml
-          grep -q "^version: $VERSION$" latest.published.yml
-          # The link on the landing page.
-          curl -fsSIL "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/MyDegreePlan-Setup.exe" -o /dev/null
+          set -e
+          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[] | "\(.name) \(.size)"' | tr -d '\r' | sort > remote.txt
+          cat remote.txt
+          for f in "MyDegreePlan-Setup-$VERSION.exe" "MyDegreePlan-Setup-$VERSION.exe.blockmap" MyDegreePlan-Setup.exe latest.yml; do
+            want="$f $(stat -c %s "$f")"
+            grep -qxF "$want" remote.txt || { echo "::error::draft is missing or has the wrong size for: $f"; exit 1; }
+          done
+
+      - name: Publish
+        id: publish
+        shell: bash
+        run: gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+      - name: Check every public URL an installed app or the website will request
+        shell: bash
+        run: |
+          set -e
+          BASE="https://github.com/$GITHUB_REPOSITORY"
+          # Releases appear on the CDN a moment after publishing: retry before calling it a failure.
+          get() { curl -fsSL --retry 8 --retry-delay 10 --retry-all-errors "$@"; }
+
+          echo "== what electron-updater reads: the releases feed, then latest.yml"
+          get "$BASE/releases.atom" | grep -q "releases/tag/v$VERSION"
+          get "$BASE/releases/latest/download/latest.yml" -o latest.public.yml
+          cat latest.public.yml
+          grep -q "^version: $VERSION$" latest.public.yml
+
+          echo "== the files latest.yml names, at the URLs the updater builds"
+          PATH_IN_YML=$(sed -n 's/^path: //p' latest.public.yml | tr -d '\r')
+          [ "$PATH_IN_YML" = "MyDegreePlan-Setup-$VERSION.exe" ]
+          get "$BASE/releases/download/v$VERSION/$PATH_IN_YML" -o installer.public.exe
+          get "$BASE/releases/download/v$VERSION/$PATH_IN_YML.blockmap" -r 0-1023 -o /dev/null
+
+          echo "== the installer's SHA-512 must match latest.yml (what the updater checks)"
+          WANT=$(sed -n 's/^sha512: //p' latest.public.yml | tr -d '\r' | head -n1)
+          GOT=$(openssl dgst -sha512 -binary installer.public.exe | openssl base64 -A)
+          [ "$WANT" = "$GOT" ] || { echo "::error::installer SHA-512 differs from latest.yml"; exit 1; }
+
+          echo "== the fixed-name link on the website, and that it is the same file"
+          get "$BASE/releases/latest/download/MyDegreePlan-Setup.exe" -o fixed.public.exe
+          cmp installer.public.exe fixed.public.exe
+
+          echo "all public URLs answer"
+
+      - name: Pull the release back to a draft if a public check failed
+        if: failure() && steps.publish.outcome == 'success'
+        shell: bash
+        run: gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=true

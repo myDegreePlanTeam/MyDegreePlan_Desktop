@@ -36,14 +36,17 @@ function webRoot() {
   return found
 }
 
+// Returns the list of requests the app could not answer (404 / 403). The smoke check fails if it is not empty.
 function serveApp(root) {
+  const misses = []
+  const miss = (request, status, text) => { misses.push(`${status} ${request.url}`); return new Response(text, { status }) }
   protocol.handle(APP_SCHEME, async request => {
     const url = new URL(request.url)
-    if (url.host !== APP_HOST) return new Response('Not found', { status: 404 })
+    if (url.host !== APP_HOST) return miss(request, 404, 'Not found')
     const target = resolveAppPath(root, url.pathname)
-    if (!target) return new Response('Forbidden', { status: 403 })
+    if (!target) return miss(request, 403, 'Forbidden')
     let body
-    try { body = await fs.promises.readFile(target.file) } catch { return new Response('Not found', { status: 404 }) }
+    try { body = await fs.promises.readFile(target.file) } catch { return miss(request, 404, 'Not found') }
     return new Response(body, {
       status: 200,
       headers: {
@@ -55,6 +58,7 @@ function serveApp(root) {
       },
     })
   })
+  return misses
 }
 
 function lockDownSession(ses) {
@@ -99,10 +103,19 @@ function createWindow() {
 }
 
 // A one-shot check used by `npm run smoke` and CI: loads the app, reports what the page sees, exits non-zero on failure.
-async function smoke(win) {
+async function smoke(win, { root, misses }) {
   const wc = win.webContents
   await new Promise(resolve => wc.once('did-finish-load', resolve))
+  // Every file of the web build must be served (a 404 here would be a 404 for a student, so it fails the release).
+  const files = fs.readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => path.relative(root, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'))
   const report = await wc.executeJavaScript(`(async () => {
+    const files = ${JSON.stringify(files)}
+    const notServed = []
+    for (const f of files) {
+      try { const r = await fetch('/' + encodeURI(f)); if (!r.ok) notServed.push(r.status + ' ' + f); await r.arrayBuffer() } catch (e) { notServed.push('error ' + f) }
+    }
     const waitFor = async (f, n = 60) => { for (let i = 0; i < n && !f(); i++) await new Promise(r => setTimeout(r, 250)); return f() }
     const rendered = await waitFor(() => document.getElementById('root')?.childElementCount > 0)
     let externalBlocked = false
@@ -112,14 +125,15 @@ async function smoke(win) {
       idbOpens = await new Promise((res, rej) => { const r = indexedDB.open('mdp-smoke', 1); r.onsuccess = () => { r.result.close(); indexedDB.deleteDatabase('mdp-smoke'); res(true) }; r.onerror = () => rej(r.error) })
     } catch {}
     return {
-      origin: location.origin, rendered, externalBlocked, idbOpens,
+      origin: location.origin, rendered, externalBlocked, idbOpens, filesChecked: files.length, notServed,
       desktopBridge: typeof window.mdpDesktop?.version === 'function' && typeof window.mdpDesktop?.updates?.onChange === 'function',
       nodeLeaked: typeof require !== 'undefined' || typeof process !== 'undefined',
       title: document.title,
     }
   })()`)
   const ok = report.origin === APP_ORIGIN && report.rendered && report.externalBlocked && report.idbOpens && report.desktopBridge && !report.nodeLeaked
-  const line = JSON.stringify({ smoke: ok ? 'pass' : 'FAIL', packaged: app.isPackaged, ...report })
+    && report.filesChecked > 0 && report.notServed.length === 0 && misses.length === 0
+  const line = JSON.stringify({ smoke: ok ? 'pass' : 'FAIL', packaged: app.isPackaged, ...report, misses })
   console.log(line)
   // A packaged GUI exe does not print to a pipe, so the report can also go to a file.
   if (process.env.MDP_SMOKE_OUT) fs.writeFileSync(process.env.MDP_SMOKE_OUT, line + '\n')
@@ -137,7 +151,8 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(() => {
     ipcMain.handle('mdp:version', () => app.getVersion())
-    serveApp(webRoot())
+    const root = webRoot()
+    const misses = serveApp(root)
     lockDownSession(session.defaultSession)
     const win = createWindow()
     // Checks only in a packaged app (a development run and a smoke run report "disabled").
@@ -147,7 +162,7 @@ if (!app.requestSingleInstanceLock()) {
       autoUpdater: require('electron-updater').autoUpdater,
       env: SMOKE ? { ...process.env, MDP_UPDATES: 'off' } : process.env,
     })
-    if (SMOKE) smoke(win).catch(err => { console.error(err); app.exit(1) })
+    if (SMOKE) smoke(win, { root, misses }).catch(err => { console.error(err); app.exit(1) })
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
   })
 
