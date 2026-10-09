@@ -1,0 +1,39 @@
+# Windows only, unsigned (signing is a later decision; see README). Output goes to release/.
+appId: org.mydegreeplanteam.desktop
+productName: MyDegreePlan
+copyright: MyDegreePlan team
+directories:
+  output: release
+files:
+  - src/**
+  - package.json
+# The Frontend's production build, staged by scripts/prepare-web.js. It sits outside app.asar as resources/web.
+extraResources:
+  - from: build/web
+    to: web
+asar: true
+# Binary hardening, applied to the packaged electron.exe. Nothing here is used by the app.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+nsis:
+  oneClick: true            # no wizard, no admin rights
+  perMachine: false         # installs for the current user only
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false   # a student's plan survives uninstall and reinstall
+  differentialPackage: true
+  # Must equal the name in latest.yml: GitHub rewrites spaces in an uploaded file's name, which would break the update download.
+  artifactName: ${productName}-Setup-${version}.${ext}
+publish:
+  provider: github
+  owner: myDegreePlanTeam
+  repo: MyDegreePlan_Desktop
+  releaseType: release
