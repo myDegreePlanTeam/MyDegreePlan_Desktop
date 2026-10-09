@@ -78,6 +78,8 @@ function createWindow() {
     show: !SMOKE,
     backgroundColor: '#ffffff',
     title: 'MyDegreePlan',
+    // A packaged app takes its icon from the exe; this is for `npm start`, where the exe is Electron's.
+    icon: app.isPackaged ? undefined : path.join(__dirname, '..', 'build-resources', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

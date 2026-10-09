@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- MyDegreePlan app icon. The app's own semester grid: three columns of course blocks rising toward a gold block.
+       Colors are the app's tokens: bg #15092A, bg-light #3A2566, gold #F3A51C, gold-light #F8BF54.
+       No institution name or mark. Rendered to PNG by scripts/make-icons.js. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3A2566"/>
+      <stop offset="1" stop-color="#15092A"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F8BF54"/>
+      <stop offset="1" stop-color="#F3A51C"/>
+    </linearGradient>
+  </defs>
+
+  <!-- the tile, with a margin so the rounded corners stay transparent at every size -->
+  <rect x="48" y="48" width="928" height="928" rx="208" fill="url(#tile)"/>
+  <rect x="49.5" y="49.5" width="925" height="925" rx="206.5" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="3"/>
+
+  <!-- the grid, scaled up a little about the tile center so it holds up at 16 to 32 px -->
+  <g transform="translate(512 512) scale(1.12) translate(-512 -512)">
+    <!-- semester 1: two blocks -->
+    <g fill="#EDE6FF" fill-opacity="0.55">
+      <rect x="204" y="686" width="176" height="120" rx="32"/>
+      <rect x="204" y="530" width="176" height="120" rx="32"/>
+    </g>
+    <!-- semester 2: three blocks -->
+    <g fill="#EDE6FF" fill-opacity="0.78">
+      <rect x="424" y="686" width="176" height="120" rx="32"/>
+      <rect x="424" y="530" width="176" height="120" rx="32"/>
+      <rect x="424" y="374" width="176" height="120" rx="32"/>
+    </g>
+    <!-- semester 3: four blocks, the last one the goal -->
+    <g fill="#EDE6FF" fill-opacity="0.96">
+      <rect x="644" y="686" width="176" height="120" rx="32"/>
+      <rect x="644" y="530" width="176" height="120" rx="32"/>
+      <rect x="644" y="374" width="176" height="120" rx="32"/>
+    </g>
+    <rect x="644" y="218" width="176" height="120" rx="32" fill="url(#gold)"/>
+  
+    <!-- the text lines on each course card -->
+    <g fill="#15092A" fill-opacity="0.30">
+      <rect x="234" y="716" width="84" height="16" rx="8"/>
+      <rect x="234" y="748" width="56" height="16" rx="8"/>
+      <rect x="234" y="560" width="84" height="16" rx="8"/>
+      <rect x="234" y="592" width="56" height="16" rx="8"/>
+      <rect x="454" y="716" width="84" height="16" rx="8"/>
+      <rect x="454" y="748" width="56" height="16" rx="8"/>
+      <rect x="454" y="560" width="84" height="16" rx="8"/>
+      <rect x="454" y="592" width="56" height="16" rx="8"/>
+      <rect x="454" y="404" width="84" height="16" rx="8"/>
+      <rect x="454" y="436" width="56" height="16" rx="8"/>
+      <rect x="674" y="716" width="84" height="16" rx="8"/>
+      <rect x="674" y="748" width="56" height="16" rx="8"/>
+      <rect x="674" y="560" width="84" height="16" rx="8"/>
+      <rect x="674" y="592" width="56" height="16" rx="8"/>
+      <rect x="674" y="404" width="84" height="16" rx="8"/>
+      <rect x="674" y="436" width="56" height="16" rx="8"/>
+      <rect x="674" y="248" width="84" height="16" rx="8"/>
+      <rect x="674" y="280" width="56" height="16" rx="8"/>
+    </g>
+  </g>
+</svg>

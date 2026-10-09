@@ -27,9 +27,18 @@ cd ../MyDegreePlan_Desktop && npm install && npm start
 | `npm run smoke` | Launch, check the page renders from `app://mdp`, IndexedDB opens, an outside request is blocked and Node is not exposed; exit 0 / 1 |
 | `npm run pack` | Build the unpacked app into `release/win-unpacked` (fast) |
 | `npm run dist` | Build the installer `release/MyDegreePlan-Setup-<version>.exe`, its blockmap and `latest.yml` |
+| `npm run icons` | Render `build-resources/icon.svg` (the source) to `build-resources/icon.png`; add `-- --preview DIR` for 16 to 256 px copies to check by eye |
 
-The built app can be smoke-tested too: `MDP_SMOKE_OUT=report.json release\win-unpacked\MyDegreePlan.exe --mdp-smoke`
-(a packaged GUI exe does not print to a pipe, so the report goes to the file).
+The built app can be smoke-tested too: `MDP_SMOKE_OUT=report.json release\win-unpacked\MyDegreePlan.exe --mdp-smoke --user-data-dir=<a new temp folder>`
+(a packaged GUI exe does not print to a pipe, so the report goes to the file). **Always give a test run its own `--user-data-dir`.** Without it the run uses
+`%APPDATA%\MyDegreePlan`, which is a real student's plan if the app is installed and running: the single-instance lock makes the test quit at once with exit 0 and no
+report, and cleaning up afterwards would delete real data. Delete only the temp folder you created.
+
+## App icon
+
+`build-resources/icon.svg` is the source: the app's semester grid (three columns of course cards rising to a gold card) in the app's violet and gold, with no
+institution name or mark. `npm run icons` renders `icon.png` (1024 px, transparent corners); electron-builder embeds 16 to 256 px frames in the exe, installer and
+uninstaller. Edit the SVG, re-run `npm run icons`, commit both files. An XML comment must not contain a double hyphen (the SVG then fails to decode).
 
 ## Releasing
 

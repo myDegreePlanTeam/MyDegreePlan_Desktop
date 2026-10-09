@@ -4,6 +4,7 @@ productName: MyDegreePlan
 copyright: MyDegreePlan team
 directories:
   output: release
+  buildResources: build-resources   # icon.svg is the source; icon.png is rendered from it by `npm run icons`
 files:
   - src/**
   - package.json
@@ -21,6 +22,7 @@ electronFuses:
   onlyLoadAppFromAsar: true
   grantFileProtocolExtraPrivileges: false
 win:
+  icon: build-resources/icon.png   # electron-builder embeds 16 to 256 px frames in the exe, installer and uninstaller
   target:
     - target: nsis
       arch: [x64]
